@@ -1,7 +1,8 @@
 const fs = require('fs');
 var url = require('url');
 const Handlebars = require('handlebars');
-const puppeteer = require('puppeteer');
+// const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
 const QRCode = require('qrcode');
 const JSZip = require("jszip");
 const { default: axios } = require('axios');
@@ -19,12 +20,21 @@ Handlebars.registerHelper('dateFormat', require('handlebars-dateformat'));
 const browserConfig = {
     headless: true,
     //comment to use default
-    executablePath: '/usr/bin/chromium-browser',
+    executablePath: '/Applications/Chromium.app/Contents/MacOS/Chromium',
     args: [
         "--no-sandbox",
         "--disable-gpu",
     ]
 }
+// const browserConfig = {
+//     headless: true,
+//     //comment to use default
+//     executablePath: '/usr/bin/chromium-browser',
+//     args: [
+//         "--no-sandbox",
+//         "--disable-gpu",
+//     ]
+// }
 delimiters(Handlebars, CUSTOM_TEMPLATE_DELIMITERS);
 let browser;
 (async function () {
@@ -118,39 +128,39 @@ const getRequestBody = async (req) => {
     return JSON.parse(data);
 };
 
-async function generateRawCertificate(certificate, templateUrl, entityId, entityName) {
-    let certificateRaw = certificate;
+async function generateRawCertificate(certificate, templateData) {
+    // let certificateRaw = certificate;
     // TODO: based on type template will be picked
-    const certificateTemplateUrl = templateUrl;
-    const qrCodeType = envData.qrType || '';
-    let qrData;
-    console.log('QR Code type: ', qrCodeType);
-    if (qrCodeType.toUpperCase() === URL) {
-        qrData = `${envData.certDomainUrl}/certs/${entityId}?t=${qrCodeType}&entity=${entityName}${process.env.ADDITIONAL_QUERY_PARAMS || ""}`;
-    } else {
-        const zip = new JSZip();
-        zip.file("certificate.json", certificateRaw, {
-            compression: "DEFLATE"
-        });
-        const zipType = (qrCodeType && qrCodeType.toUpperCase() === URL_W3C_VC);
-        const zippedData = await zip.generateAsync({type: zipType ? 'base64': 'string', compression: "DEFLATE"})
-            .then(function (content) {
-                return content;
-            });
-        qrData = zippedData
-        if (zipType) {
-            console.log('ZippedData length', String(zippedData).length);
-            qrData = `${envData.certDomainUrl}/certs/${entityId}?t=${envData.qrType}&data=${zippedData}&entity=${entityName}${process.env.ADDITIONAL_QUERY_PARAMS || ""}`;
-        }
-    }
-    
-    const dataURL = await QRCode.toDataURL(qrData, {scale: 3});  
-    const certificateData = prepareDataForCertificateWithQRCode(certificateRaw, dataURL);
-    return await renderDataToTemplate(certificateTemplateUrl, certificateData);
+    // const certificateTemplateUrl = templateUrl;
+    // const qrCodeType = envData.qrType || '';
+    // let qrData;
+    // console.log('QR Code type: ', qrCodeType);
+    // if (qrCodeType.toUpperCase() === URL) {
+    //     qrData = `${envData.certDomainUrl}/certs/${entityId}?t=${qrCodeType}&entity=${entityName}${process.env.ADDITIONAL_QUERY_PARAMS || ""}`;
+    // } else {
+    //     const zip = new JSZip();
+    //     zip.file("certificate.json", certificateRaw, {
+    //         compression: "DEFLATE"
+    //     });
+    //     const zipType = (qrCodeType && qrCodeType.toUpperCase() === URL_W3C_VC);
+    //     const zippedData = await zip.generateAsync({type: zipType ? 'base64': 'string', compression: "DEFLATE"})
+    //         .then(function (content) {
+    //             return content;
+    //         });
+    //     qrData = zippedData
+    //     if (zipType) {
+    //         console.log('ZippedData length', String(zippedData).length);
+    //         qrData = `${envData.certDomainUrl}/certs/${entityId}?t=${envData.qrType}&data=${zippedData}&entity=${entityName}${process.env.ADDITIONAL_QUERY_PARAMS || ""}`;
+    //     }
+    // }
+    console.log({data: JSON.stringify(certificate)})
+    const dataURL = await QRCode.toDataURL(JSON.stringify(certificate), {scale: 2});
+    const certificateData = prepareDataForCertificateWithQRCode(templateData, dataURL);
+    return await renderDataToTemplate("diploma-template", certificateData);
 }
 
-async function createCertificatePDF(certificate, templateUrl, res, entityId, entityName) {
-    let rawCertificate = await generateRawCertificate(certificate, templateUrl, entityId, entityName);
+async function createCertificatePDF(certificate, templateData, res) {
+    let rawCertificate = await generateRawCertificate(certificate, templateData);
     const pdfBuffer = await createPDF(rawCertificate);
     res.statusCode = 200;
     return pdfBuffer;
@@ -164,6 +174,16 @@ function sendResponse(res, statusCode, message) {
     res.end(message);
 }
 
+function getDataFromVC(vc) {
+    const data = {
+        nameOfPerson: vc.data.verifiableCredential[0].type[1],
+        university: vc.data.verifiableCredential[0].credentialSubject.alumniOf.name['@value'],
+        issuanceDate: vc.data.verifiableCredential[0].issuanceDate,
+        issuer: vc.data.verifiableCredential[0].issuer
+    }
+    return data
+}
+
 async function getCertificatePDF(req, res) {
     try {
         const reqBody = await getRequestBody(req)
@@ -171,11 +191,12 @@ async function getCertificatePDF(req, res) {
             return sendResponse(res, 400, "Bad request");
         }
         console.log('Got this req', reqBody);
-        let {certificate, templateUrl, entityId, entityName} = reqBody;
-        if (certificate === "" || templateUrl === "") {
-            return sendResponse(res, 400, "Required parameters missing");
-        }
-        res = await createCertificatePDF(certificate, templateUrl, res, entityId, entityName);
+        // let {certificate, templateUrl, entityId, entityName} = reqBody;
+        let templateData = getDataFromVC(reqBody)
+        // if (certificate === "" || templateUrl === "") {
+        //     return sendResponse(res, 400, "Required parameters missing");
+        // }
+        res = await createCertificatePDF(reqBody, templateData, res);
         return res
     } catch (err) {
         console.error(err);
@@ -190,11 +211,12 @@ async function getCertificate(req, res) {
             return sendResponse(res, 400, "Bad request");
         }
         console.log('Got this req', reqBody);
-        let {certificate, templateUrl, entityId, entityName} = reqBody;
-        if (certificate === "" || templateUrl === "") {
-            return sendResponse(res, 400, "Required parameters missing");
-        }
-        res = await generateRawCertificate(certificate, templateUrl, entityId, entityName);
+        // let {certificate, templateUrl, entityId, entityName} = reqBody;
+        let templateData = getDataFromVC(reqBody)
+        // if (certificate === "" || templateUrl === "") {
+        //     return sendResponse(res, 400, "Required parameters missing");
+        // }
+        res = await generateRawCertificate(reqBody, templateData);
         return res
     } catch (err) {
         console.error(err);
@@ -202,13 +224,13 @@ async function getCertificate(req, res) {
     }
 }
 
-const fetchCachedTemplate = async (templateFileURL) => {
-    console.log("Fetching credential templates: ", templateFileURL);
-    const template = cacheInstance.get(templateFileURL);
+const fetchCachedTemplate = async (templateName) => {
+    console.log("Fetching credential templates: ", templateName);
+    const template = cacheInstance.get(templateName);
     if (template === undefined) {
-        let template = await axios.get(templateFileURL).then(res => res.data);
-        cacheInstance.set(templateFileURL, template);
-        console.debug("Fetched credential templates from API");
+        const template = fs.readFileSync(templateName+".html", 'utf8');
+        cacheInstance.set(templateName, template);
+        console.debug("Fetched credential templates from File");
         return template;
     } else {
         console.debug("Fetched credential templates from cache");
@@ -216,8 +238,8 @@ const fetchCachedTemplate = async (templateFileURL) => {
     }
 };
 
-async function getTemplate(templateFileURL) {
-    return await fetchCachedTemplate(templateFileURL);
+async function getTemplate(templateName) {
+    return await fetchCachedTemplate(templateName);
 }
 
 const getHandleBarTemplate = (credentialTemplate) => {
@@ -233,13 +255,13 @@ const getHandleBarTemplate = (credentialTemplate) => {
     }
 };
 
-async function renderDataToTemplate(templateFileURL, data) {
+async function renderDataToTemplate(templateName, templateData) {
     console.log("rendering data to template")
     // const htmlData = fs.readFileSync(templateFileURL, 'utf8');
-    const htmlData = await getTemplate(templateFileURL);
+    const htmlData = await getTemplate(templateName);
     // console.log('Received ', htmlData);
     const template = getHandleBarTemplate(htmlData);
-    return template(data);
+    return template(templateData);
 }
 
 async function createPDF(certificate) {
@@ -273,7 +295,7 @@ async function createPDF(certificate) {
 
 function prepareDataForCertificateWithQRCode(certificateRaw, dataURL) {
     console.log("Preparing data for certificate template")
-    certificateRaw = JSON.parse(certificateRaw);
+    // certificateRaw = JSON.parse(certificateRaw);
     const certificateData = {
         ...certificateRaw,
         qrCode: dataURL
